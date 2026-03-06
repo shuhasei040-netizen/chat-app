@@ -2151,8 +2151,18 @@ const MessageItem = React.memo(({ m, user, sender, isGroup, db: db2, appId: appI
   const isInvalidBlob = !isMe && m.content?.startsWith("blob:");
   const base64ToBlobUrl = async (base64Data, mimeType) => {
     try {
-      const res = await fetch(`data:${mimeType};base64,${base64Data}`);
-      const blob = await res.blob();
+      const byteCharacters = atob(base64Data);
+      const byteArrays = [];
+      for (let offset = 0; offset < byteCharacters.length; offset += 1024) {
+        const slice = byteCharacters.slice(offset, offset + 1024);
+        const byteNumbers = new Array(slice.length);
+        for (let i = 0; i < slice.length; i++) {
+          byteNumbers[i] = slice.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        byteArrays.push(byteArray);
+      }
+      const blob = new Blob(byteArrays, { type: mimeType });
       return URL.createObjectURL(blob);
     } catch (e) {
       console.error("Blob creation failed", e);
@@ -2164,16 +2174,17 @@ const MessageItem = React.memo(({ m, user, sender, isGroup, db: db2, appId: appI
     if (url) setMediaSrc(url);
   };
   useEffect(() => {
-    if (isMe && m.content?.startsWith("blob:")) {
+    if (isMe && m.isUploading && m.content?.startsWith("blob:")) {
       setMediaSrc(m.content);
       return;
     }
     return () => {
       if (mediaSrc && mediaSrc.startsWith("blob:") && !isMe) URL.revokeObjectURL(mediaSrc);
     };
-  }, [isMe, m.content]);
+  }, [isMe, m.content, m.isUploading]);
+  
   useEffect(() => {
-    if (isMe && m.content?.startsWith("blob:")) return;
+    if (isMe && m.isUploading) return; 
     if (m.hasChunks) {
       if (mediaSrc && !mediaSrc.startsWith("blob:") && mediaSrc !== m.preview) return;
       setLoading(true);
@@ -2184,7 +2195,6 @@ const MessageItem = React.memo(({ m, user, sender, isGroup, db: db2, appId: appI
             const total = m.chunkCount || null;
             const pathBase = collection(db2, "artifacts", appId2, "public", "data", "chats", chatId, "messages", m.id, "chunks");
             if (!total) {
-              // fallback: query orderBy index
               const snap = await getDocs(query(pathBase, orderBy("index", "asc")));
               const parts = [];
               snap.forEach((d) => parts.push(d.data().data || ""));
@@ -2209,13 +2219,11 @@ const MessageItem = React.memo(({ m, user, sender, isGroup, db: db2, appId: appI
                       }
                     }
                   } catch {
-                    // ignore; will retry
                   }
                 }
               });
               await Promise.all(workers);
               if (missing.size > 0) {
-                // exponential backoff
                 await new Promise((r) => setTimeout(r, 250 * Math.pow(2, attempt)));
               }
             }
@@ -2251,7 +2259,7 @@ const MessageItem = React.memo(({ m, user, sender, isGroup, db: db2, appId: appI
         setMediaSrc(m.content || m.preview);
       }
     }
-  }, [m.id, chatId, m.content, m.hasChunks, isMe, isInvalidBlob, m.preview, m.type, m.mimeType, m.chunkCount]);
+  }, [m.id, chatId, m.content, m.hasChunks, isMe, isInvalidBlob, m.preview, m.type, m.mimeType, m.chunkCount, m.isUploading]);
   const handleDownload = async () => {
     if (m.content && m.content.startsWith("blob:")) {
       const a = document.createElement("a");
@@ -2279,9 +2287,16 @@ const MessageItem = React.memo(({ m, user, sender, isGroup, db: db2, appId: appI
         if (base64Data) {
           const mimeType = m.mimeType || "application/octet-stream";
           const byteCharacters = atob(base64Data);
-          const byteNumbers = new Array(byteCharacters.length);
-          for (let i = 0; i < byteCharacters.length; i++) byteNumbers[i] = byteCharacters.charCodeAt(i);
-          const blob = new Blob([new Uint8Array(byteNumbers)], { type: mimeType });
+          const byteArrays = [];
+          for (let offset = 0; offset < byteCharacters.length; offset += 1024) {
+            const slice = byteCharacters.slice(offset, offset + 1024);
+            const byteNumbers = new Array(slice.length);
+            for (let i = 0; i < slice.length; i++) {
+              byteNumbers[i] = slice.charCodeAt(i);
+            }
+            byteArrays.push(new Uint8Array(byteNumbers));
+          }
+          const blob = new Blob(byteArrays, { type: mimeType });
           dataUrl = URL.createObjectURL(blob);
         }
       } else if (!dataUrl) {
